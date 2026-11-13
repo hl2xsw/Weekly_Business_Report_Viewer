@@ -1,0 +1,6 @@
+{
+  "name": "주간업무보고 뷰어",
+  "description": "Google Drive와 Google Sheets의 주간업무보고를 팀별 한 페이지씩 깔끔하게 열람하는 뷰어",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
