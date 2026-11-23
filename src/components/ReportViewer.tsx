@@ -66,14 +66,15 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadSheet = async (targetTab?: string) => {
+  const loadSheet = async (targetTab?: string, forceRefresh = false) => {
     setLoading(true);
     setError(null);
     try {
       const payload = await fetchSheetGrid(
         accessToken,
         spreadsheetId,
-        targetTab ?? activeTabTitle
+        targetTab ?? activeTabTitle,
+        { forceRefresh }
       );
       setGridPayload(payload);
       setTabs(payload.tabs);
@@ -212,9 +213,11 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
       (showPlanned && (currentTeam?.extraPlanned.length ?? 0) > 0) ||
       (showIssues && (currentTeam?.extraIssues.length ?? 0) > 0));
 
-  const sheetUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
-    spreadsheetId
-  )}`;
+  const sheetUrl =
+    gridPayload?.webViewLink ||
+    `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
+      spreadsheetId
+    )}`;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -236,7 +239,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => loadSheet(activeTabTitle)}
+              onClick={() => loadSheet(activeTabTitle, true)}
               disabled={loading}
               className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 disabled:opacity-50"
             >
@@ -286,7 +289,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => loadSheet(activeTabTitle)}
+                onClick={() => loadSheet(activeTabTitle, true)}
                 disabled={loading}
                 className="h-9 px-3 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg whitespace-nowrap"
               >
@@ -597,7 +600,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               <div className="pt-2 flex items-center justify-center gap-3">
                 <button
                   type="button"
-                  onClick={() => loadSheet(activeTabTitle)}
+                  onClick={() => loadSheet(activeTabTitle, true)}
                   className="px-4 py-2 text-sm font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors"
                 >
                   다시 시도

@@ -14,6 +14,7 @@ import {
 import { LoginPage } from './components/LoginPage';
 import { DrivePickerView } from './components/DrivePickerView';
 import { ReportViewer } from './components/ReportViewer';
+import { clearSpreadsheetCache } from './lib/googleWorkspace';
 
 interface SelectedFile {
   id: string;
@@ -100,6 +101,7 @@ export default function App() {
 
   const handleLogout = async () => {
     await logout();
+    clearSpreadsheetCache();
     setToken(null);
     setUser(null);
     setNeedsAuth(true);
