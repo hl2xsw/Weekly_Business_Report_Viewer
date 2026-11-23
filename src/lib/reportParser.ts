@@ -137,30 +137,64 @@ function extractRichLines(cell?: SheetCellData): RichTextLine[] {
 
 interface NumberedChunk {
   num: string | null;
+  subPrefix: string | null;
   lines: RichTextLine[];
 }
 
-function splitIntoNumberedChunks(lines: RichTextLine[]): NumberedChunk[] {
+const TOP_LEVEL_NUM_RE = /^(\d{1,2})(?:[)）]\s*|\.\s+)(.*)$/;
+const SUB_LEVEL_NUM_RE = /^(\d{1,2})\s*[-–—]\s*(\d{1,2})(?:[)）]\s*|\.\s+)(.*)$/;
+
+function splitIntoNumberedChunks(
+  lines: RichTextLine[],
+  options?: { allowSubNumber?: boolean }
+): NumberedChunk[] {
+  const allowSubNumber = options?.allowSubNumber ?? true;
   const chunks: NumberedChunk[] = [];
   let current: NumberedChunk | null = null;
 
   for (const line of lines) {
     const trimmed = line.text.trim();
-    const match = trimmed.match(/^(\d{1,2})(?:[)）]\s*|\.\s+)(.*)$/);
-    if (match) {
+
+    if (allowSubNumber) {
+      const subMatch = trimmed.match(SUB_LEVEL_NUM_RE);
+      if (subMatch) {
+        if (current) chunks.push(current);
+        const majorNum = subMatch[1];
+        const minorNum = subMatch[2];
+        const rest = subMatch[3].trim();
+        const normalizedPrefix = `${majorNum}-${minorNum})`;
+        current = {
+          num: majorNum,
+          subPrefix: normalizedPrefix,
+          lines: [
+            {
+              text: rest ? `${normalizedPrefix} ${rest}` : normalizedPrefix,
+              strikethrough: line.strikethrough,
+            },
+          ],
+        };
+        continue;
+      }
+    }
+
+    const topMatch = trimmed.match(TOP_LEVEL_NUM_RE);
+    if (topMatch) {
       if (current) chunks.push(current);
+      const majorNum = topMatch[1];
+      const rest = topMatch[2].trim();
       current = {
-        num: match[1],
+        num: majorNum,
+        subPrefix: null,
         lines: [
           {
-            text: match[2].trim() ? `${match[1]}) ${match[2].trim()}` : trimmed,
+            text: rest ? `${majorNum}) ${rest}` : trimmed,
             strikethrough: line.strikethrough,
           },
         ],
       };
     } else {
       if (!current) {
-        current = { num: null, lines: [line] };
+        current = { num: null, subPrefix: null, lines: [line] };
       } else {
         current.lines.push(line);
       }
@@ -503,15 +537,25 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
       }
     }
 
-    // Split each column into numbered chunks so 1), 2), 3)... align across B, C, D, E, and AU
-    const projectChunks = splitIntoNumberedChunks(projectLinesAll);
-    const ownerChunks = splitIntoNumberedChunks(ownerLinesAll);
-    const plannedChunks = splitIntoNumberedChunks(plannedLinesAll);
-    const issueChunks = splitIntoNumberedChunks(issueLinesAll);
+    // Split B column by top-level project numbers (1), 2), ...),
+    // and split C/D/E/AU columns by both top-level (1), 2)) and sub-numbers (1-1), 2-1), ...)
+    const projectChunks = splitIntoNumberedChunks(projectLinesAll, {
+      allowSubNumber: false,
+    });
+    const ownerChunks = splitIntoNumberedChunks(ownerLinesAll, {
+      allowSubNumber: true,
+    });
+    const plannedChunks = splitIntoNumberedChunks(plannedLinesAll, {
+      allowSubNumber: true,
+    });
+    const issueChunks = splitIntoNumberedChunks(issueLinesAll, {
+      allowSubNumber: true,
+    });
     const execChunksByCol: Record<number, NumberedChunk[]> = {};
     for (const ec of executionColumns) {
       execChunksByCol[ec.colIndex] = splitIntoNumberedChunks(
-        execLinesByCol[ec.colIndex]
+        execLinesByCol[ec.colIndex],
+        { allowSubNumber: true }
       );
     }
 
@@ -554,17 +598,18 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
           .replace(/^\d{1,2}(?:[)）]\s*|\.\s+)/, '')
           .trim();
 
-        const stripNumFromFirstLine = (chunks: NumberedChunk[]): RichTextLine[] => {
+        const collectMatchedLines = (chunks: NumberedChunk[]): RichTextLine[] => {
           const matched = chunks.filter((c) => c.num === num);
           const result: RichTextLine[] = [];
           for (const m of matched) {
             m.lines.forEach((line, idx) => {
-              if (idx === 0) {
+              if (idx === 0 && !m.subPrefix) {
                 const cleaned = line.text
                   .replace(/^\d{1,2}(?:[)）]\s*|\.\s+)/, '')
                   .trim();
                 if (cleaned) result.push({ ...line, text: cleaned });
               } else {
+                // Keep sub-number prefixes like "1-1)", "1-2)", "2-1)" intact
                 result.push(line);
               }
             });
@@ -574,16 +619,16 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
 
         const execMap: Record<number, RichTextLine[]> = {};
         for (const ec of executionColumns) {
-          execMap[ec.colIndex] = stripNumFromFirstLine(execChunksByCol[ec.colIndex]);
+          execMap[ec.colIndex] = collectMatchedLines(execChunksByCol[ec.colIndex]);
         }
 
         projects.push({
           key: `${r}-proj-${num}-${projects.length}`,
           numberPrefix: num,
           projectTitle: cleanTitle || rawProjText,
-          owners: stripNumFromFirstLine(ownerChunks),
-          plannedTasks: stripNumFromFirstLine(plannedChunks),
-          issues: stripNumFromFirstLine(issueChunks),
+          owners: collectMatchedLines(ownerChunks),
+          plannedTasks: collectMatchedLines(plannedChunks),
+          issues: collectMatchedLines(issueChunks),
           executionByCol: execMap,
         });
       }
