@@ -6,7 +6,9 @@
 import { useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  AuthErrorInfo,
   clearAccessToken,
+  formatAuthError,
   googleSignIn,
   initAuth,
   logout,
@@ -52,7 +54,7 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<AuthErrorInfo | null>(null);
 
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(() =>
     readStoredLastFile()
@@ -88,11 +90,7 @@ export default function App() {
       setToken(result.accessToken);
       setNeedsAuth(false);
     } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Google 로그인 중 오류가 발생했습니다.';
-      setAuthError(msg);
+      setAuthError(formatAuthError(err));
       setNeedsAuth(true);
     } finally {
       setIsSigningIn(false);
@@ -112,7 +110,9 @@ export default function App() {
     clearAccessToken();
     setToken(null);
     setNeedsAuth(true);
-    setAuthError('Google 인증이 만료되었습니다. 다시 로그인해 주세요.');
+    setAuthError({
+      message: 'Google 인증이 만료되었습니다. 다시 로그인해 주세요.',
+    });
   };
 
   const saveRecentFile = (file: SelectedFile) => {

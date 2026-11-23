@@ -60,6 +60,16 @@ function normalizeHeader(text: string): string {
   return text.replace(/\s+/g, '').toLowerCase();
 }
 
+function isPlausibleHeaderLabel(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 45) return false;
+  if (/[\r\n]/.test(trimmed)) return false;
+  // Numbered body items like "1) 480kW..." are never table column headers
+  if (/^\d{1,2}\)\s*/.test(trimmed)) return false;
+  return true;
+}
+
 function extractRichLines(cell?: SheetCellData): RichTextLine[] {
   if (!cell || !cell.formattedValue) return [];
   const raw = cell.formattedValue;
@@ -81,11 +91,15 @@ function extractRichLines(cell?: SheetCellData): RichTextLine[] {
   for (const lineText of rawLines) {
     const lineStart = charOffset;
     const lineEnd = charOffset + lineText.length;
-    charOffset = lineEnd + 1;
+    // Advance accurately past either \r\n (2 chars) or \n (1 char)
+    if (raw[lineEnd] === '\r' && raw[lineEnd + 1] === '\n') {
+      charOffset = lineEnd + 2;
+    } else {
+      charOffset = lineEnd + 1;
+    }
 
     if (lineText.trim().length === 0) continue;
 
-    // Determine whether the non-whitespace characters of this line are predominantly struck through
     let struckChars = 0;
     let totalNonSpace = 0;
 
@@ -132,7 +146,7 @@ function splitIntoNumberedChunks(lines: RichTextLine[]): NumberedChunk[] {
 
   for (const line of lines) {
     const trimmed = line.text.trim();
-    const match = trimmed.match(/^(\d{1,2})(?:\)\s*|\.\s+)(.*)$/);
+    const match = trimmed.match(/^(\d{1,2})(?:[)）]\s*|\.\s+)(.*)$/);
     if (match) {
       if (current) chunks.push(current);
       current = {
@@ -178,6 +192,15 @@ function extractDateFromExecHeader(header: string): string {
   return header.replace(/업무\s*실행/i, '').trim() || header;
 }
 
+function isExecutionHeader(raw: string): boolean {
+  if (!isPlausibleHeaderLabel(raw)) return false;
+  const norm = normalizeHeader(raw);
+  if (norm.includes('업무실행') || norm.includes('실행')) return true;
+  // Also match date-only weekly execution columns like "11/20" or "(11/20)"
+  if (/^\(?\d{1,2}[./-]\d{1,2}\)?$/.test(norm)) return true;
+  return false;
+}
+
 function findHeaderRow(rows: SheetCellData[][]): number {
   const maxScan = Math.min(rows.length, 25);
   let bestRow = -1;
@@ -185,24 +208,60 @@ function findHeaderRow(rows: SheetCellData[][]): number {
 
   for (let r = 0; r < maxScan; r++) {
     const row = rows[r] ?? [];
-    let score = 0;
-    for (const cell of row) {
-      const norm = normalizeHeader(cell?.formattedValue ?? '');
-      if (!norm) continue;
-      if (norm.includes('팀')) score += 2;
-      if (norm.includes('프로젝트')) score += 3;
-      if (norm.includes('담당자')) score += 2;
-      if (norm.includes('업무진행예정') || norm.includes('진행예정')) score += 2;
-      if (norm.includes('이슈')) score += 2;
-      if (norm.includes('업무실행') || norm.includes('실행')) score += 3;
+
+    // Score by DISTINCT header column roles (never let multi-line body paragraphs inflate score)
+    let hasTeam = false;
+    let hasProject = false;
+    let hasOwner = false;
+    let hasPlanned = false;
+    let hasIssue = false;
+    let hasExec = false;
+    let positionalBonus = 0;
+
+    for (let c = 0; c < row.length; c++) {
+      const raw = row[c]?.formattedValue?.trim() ?? '';
+      if (!isPlausibleHeaderLabel(raw)) continue;
+      const norm = normalizeHeader(raw);
+
+      if (!hasTeam && (norm === '팀' || norm.startsWith('팀(') || norm.includes('팀명') || norm.includes('조직'))) {
+        hasTeam = true;
+        if (c === 0) positionalBonus += 3;
+      } else if (!hasProject && norm.includes('프로젝트')) {
+        hasProject = true;
+        if (c === 1) positionalBonus += 3;
+      } else if (!hasOwner && norm.includes('담당자')) {
+        hasOwner = true;
+        if (c === 2) positionalBonus += 2;
+      } else if (
+        !hasPlanned &&
+        (norm.includes('업무진행예정') || norm.includes('진행예정') || norm.includes('추진일정'))
+      ) {
+        hasPlanned = true;
+        if (c === 3) positionalBonus += 2;
+      } else if (!hasIssue && norm.includes('이슈')) {
+        hasIssue = true;
+        if (c === 4) positionalBonus += 2;
+      } else if (c >= 4 && isExecutionHeader(raw)) {
+        hasExec = true;
+      }
     }
+
+    let score = positionalBonus;
+    if (hasTeam) score += 5;
+    if (hasProject) score += 5;
+    if (hasOwner) score += 4;
+    if (hasPlanned) score += 4;
+    if (hasIssue) score += 3;
+    if (hasExec) score += 5;
+
+    // Require at least 2 distinct core header columns (score >= 10)
     if (score > bestScore) {
       bestScore = score;
       bestRow = r;
     }
   }
 
-  return bestScore >= 4 ? bestRow : -1;
+  return bestScore >= 10 ? bestRow : -1;
 }
 
 function getMergeEndRow(
@@ -223,7 +282,7 @@ function getMergeEndRow(
 }
 
 export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyReport {
-  const { rows, merges, columnHidden, spreadsheetTitle, activeTab } = grid;
+  const { rows, merges, columnHidden, rowHidden = [], spreadsheetTitle, activeTab } = grid;
   const headerRowIndex = findHeaderRow(rows);
 
   // Extract metadata from rows above the table header
@@ -277,23 +336,28 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
 
   for (let c = 0; c < headerRow.length; c++) {
     const rawHeader = headerRow[c]?.formattedValue?.trim() ?? '';
-    if (!rawHeader) continue;
+    if (!isPlausibleHeaderLabel(rawHeader)) continue;
     const norm = normalizeHeader(rawHeader);
 
-    if (teamCol === -1 && norm.includes('팀')) {
+    if (
+      teamCol === -1 &&
+      c <= 2 &&
+      (norm === '팀' || norm.startsWith('팀(') || norm.includes('팀명') || norm.includes('조직'))
+    ) {
       teamCol = c;
-    } else if (projectCol === -1 && norm.includes('프로젝트')) {
+    } else if (projectCol === -1 && c <= 3 && norm.includes('프로젝트')) {
       projectCol = c;
-    } else if (ownerCol === -1 && norm.includes('담당자')) {
+    } else if (ownerCol === -1 && c <= 4 && norm.includes('담당자')) {
       ownerCol = c;
     } else if (
       plannedCol === -1 &&
-      (norm.includes('업무진행예정') || norm.includes('진행예정') || norm.includes('예정'))
+      c <= 5 &&
+      (norm.includes('업무진행예정') || norm.includes('진행예정') || norm.includes('추진일정') || norm.includes('예정'))
     ) {
       plannedCol = c;
-    } else if (issueCol === -1 && norm.includes('이슈')) {
+    } else if (issueCol === -1 && c <= 6 && norm.includes('이슈')) {
       issueCol = c;
-    } else if (norm.includes('업무실행') || norm.includes('실행')) {
+    } else if (isExecutionHeader(rawHeader)) {
       executionColumns.push({
         colIndex: c,
         colLetter: indexToColLetters(c),
@@ -304,10 +368,41 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
     }
   }
 
+  // Enforce standard A/B/C/D/E defaults when headers are standard or partially blank
   if (teamCol === -1) teamCol = 0;
   if (projectCol === -1) projectCol = 1;
+  if (ownerCol === -1 && headerRow.length > 2) ownerCol = 2;
+  if (plannedCol === -1 && headerRow.length > 3) plannedCol = 3;
+  if (issueCol === -1 && headerRow.length > 4) issueCol = 4;
 
-  // Determine default execution column: prefer visible rightmost column with content, or rightmost visible, or rightmost overall
+  // Fallback: if no execution column header matched explicitly, scan columns after E (col >= 5) that have data
+  if (executionColumns.length === 0) {
+    let maxCol = headerRow.length - 1;
+    for (let r = headerRowIndex + 1; r < rows.length; r++) {
+      maxCol = Math.max(maxCol, (rows[r]?.length ?? 0) - 1);
+    }
+    for (let c = Math.max(5, issueCol + 1); c <= maxCol; c++) {
+      let colHasData = false;
+      for (let r = headerRowIndex + 1; r < rows.length; r++) {
+        if (rows[r]?.[c]?.formattedValue?.trim()) {
+          colHasData = true;
+          break;
+        }
+      }
+      const hdr = headerRow[c]?.formattedValue?.trim() || `업무 실행(${indexToColLetters(c)})`;
+      if (colHasData || headerRow[c]?.formattedValue?.trim()) {
+        executionColumns.push({
+          colIndex: c,
+          colLetter: indexToColLetters(c),
+          headerLabel: hdr,
+          dateLabel: extractDateFromExecHeader(hdr),
+          hidden: Boolean(columnHidden[c]),
+        });
+      }
+    }
+  }
+
+  // Pick the latest (rightmost) visible execution column with data (e.g. AU: 업무 실행(11/20))
   const visibleExecCols = executionColumns.filter((col) => !col.hidden);
   let defaultExecutionColIndex: number | null = null;
 
@@ -324,9 +419,6 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
       break;
     }
   }
-  if (defaultExecutionColIndex === null && visibleExecCols.length > 0) {
-    defaultExecutionColIndex = visibleExecCols[visibleExecCols.length - 1].colIndex;
-  }
   if (defaultExecutionColIndex === null && executionColumns.length > 0) {
     for (let i = executionColumns.length - 1; i >= 0; i--) {
       if (hasDataInCol(executionColumns[i].colIndex)) {
@@ -334,54 +426,58 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
         break;
       }
     }
-    if (defaultExecutionColIndex === null) {
-      defaultExecutionColIndex =
-        executionColumns[executionColumns.length - 1].colIndex;
-    }
+  }
+  if (defaultExecutionColIndex === null && visibleExecCols.length > 0) {
+    defaultExecutionColIndex = visibleExecCols[visibleExecCols.length - 1].colIndex;
+  }
+  if (defaultExecutionColIndex === null && executionColumns.length > 0) {
+    defaultExecutionColIndex =
+      executionColumns[executionColumns.length - 1].colIndex;
   }
 
-  // Group data rows into teams
+  // Group data rows into teams starting right after headerRowIndex (e.g. Row 8 -> r = 7)
   const teams: TeamReport[] = [];
   let r = headerRowIndex + 1;
 
   while (r < rows.length) {
+    if (rowHidden[r]) {
+      r++;
+      continue;
+    }
+
     const row = rows[r] ?? [];
     const teamText = row[teamCol]?.formattedValue?.trim() ?? '';
-    const hasAnyRowContent = row.some((c) => Boolean(c?.formattedValue?.trim()));
 
-    if (!teamText && !hasAnyRowContent) {
+    if (!teamText) {
       r++;
       continue;
     }
 
-    if (!teamText && teams.length === 0) {
-      r++;
-      continue;
-    }
-
-    // If this row starts a new team (or merges across multiple rows)
+    // Consume merged rows under this team cell in A column
     const mergeEnd = getMergeEndRow(merges, r, teamCol);
     let endRow = mergeEnd;
 
-    // Also consume subsequent rows if teamCol is empty while other columns have content (unmerged continuation rows)
-    if (teamText) {
-      let probe = Math.max(r, mergeEnd) + 1;
-      while (probe < rows.length) {
-        const probeRow = rows[probe] ?? [];
-        const probeTeam = probeRow[teamCol]?.formattedValue?.trim() ?? '';
-        const probeHasContent = probeRow.some((c) =>
-          Boolean(c?.formattedValue?.trim())
-        );
-        if (probeTeam || !probeHasContent) break;
-        endRow = probe;
-        probe++;
-      }
+    // Also consume immediately contiguous rows where A column is empty but B/C/D/E/exec has content
+    let probe = Math.max(r, mergeEnd) + 1;
+    while (probe < rows.length) {
+      const probeRow = rows[probe] ?? [];
+      const probeTeam = probeRow[teamCol]?.formattedValue?.trim() ?? '';
+      if (probeTeam) break;
+
+      const probeHasRelevantContent =
+        Boolean(probeRow[projectCol]?.formattedValue?.trim()) ||
+        (ownerCol >= 0 && Boolean(probeRow[ownerCol]?.formattedValue?.trim())) ||
+        (plannedCol >= 0 && Boolean(probeRow[plannedCol]?.formattedValue?.trim())) ||
+        (issueCol >= 0 && Boolean(probeRow[issueCol]?.formattedValue?.trim())) ||
+        (defaultExecutionColIndex !== null &&
+          Boolean(probeRow[defaultExecutionColIndex]?.formattedValue?.trim()));
+
+      if (!probeHasRelevantContent) break;
+      endRow = probe;
+      probe++;
     }
 
-    const rawTeamLabel = (
-      teamText ||
-      (teams.length > 0 ? teams[teams.length - 1].rawTeamLabel : '미지정 팀')
-    )
+    const rawTeamLabel = teamText
       .replace(/\r?\n/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -407,7 +503,7 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
       }
     }
 
-    // Split each column into numbered chunks so 1), 2), 3)... align into structured project rows
+    // Split each column into numbered chunks so 1), 2), 3)... align across B, C, D, E, and AU
     const projectChunks = splitIntoNumberedChunks(projectLinesAll);
     const ownerChunks = splitIntoNumberedChunks(ownerLinesAll);
     const plannedChunks = splitIntoNumberedChunks(plannedLinesAll);
@@ -435,7 +531,6 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
 
       for (const pChunk of projectChunks) {
         if (pChunk.num === null) {
-          // Non-numbered project text: create an entry
           const title = pChunk.lines.map((l) => l.text).join(' ').trim();
           if (title) {
             projects.push({
@@ -454,10 +549,9 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
         const num = pChunk.num;
         usedNums.add(num);
 
-        // Strip leading "1)" from project title for crisp display while keeping numberPrefix
         const rawProjText = pChunk.lines.map((l) => l.text).join(' ').trim();
         const cleanTitle = rawProjText
-          .replace(/^\d{1,2}(?:\)\s*|\.\s+)/, '')
+          .replace(/^\d{1,2}(?:[)）]\s*|\.\s+)/, '')
           .trim();
 
         const stripNumFromFirstLine = (chunks: NumberedChunk[]): RichTextLine[] => {
@@ -467,7 +561,7 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
             m.lines.forEach((line, idx) => {
               if (idx === 0) {
                 const cleaned = line.text
-                  .replace(/^\d{1,2}(?:\)\s*|\.\s+)/, '')
+                  .replace(/^\d{1,2}(?:[)）]\s*|\.\s+)/, '')
                   .trim();
                 if (cleaned) result.push({ ...line, text: cleaned });
               } else {
@@ -494,7 +588,6 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
         });
       }
 
-      // Collect any unnumbered or unmatched chunks into extra sections so zero data is lost
       for (const ch of ownerChunks) {
         if (ch.num === null || !usedNums.has(ch.num)) {
           extraOwners.push(...ch.lines);
@@ -518,7 +611,6 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
         }
       }
     } else {
-      // Fallback: sheet row does not use 1) 2) numbering — preserve everything in a single project/summary entry
       const projTitle =
         projectLinesAll.map((l) => l.text).join(' / ').trim() || '주요 업무 내용';
       const execMap: Record<number, RichTextLine[]> = {};

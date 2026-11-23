@@ -81,6 +81,20 @@ function parseRangeRef(ref: string): GridRange | null {
   };
 }
 
+function findZipFile(zip: JSZip, path: string): JSZip.JSZipObject | null {
+  const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '');
+  const exact = zip.file(normalized);
+  if (exact) return exact;
+
+  const lower = normalized.toLowerCase();
+  for (const key of Object.keys(zip.files)) {
+    if (key.toLowerCase() === lower) {
+      return zip.files[key];
+    }
+  }
+  return null;
+}
+
 function getDirectChildrenByLocalName(
   parent: Element,
   localName: string
@@ -145,18 +159,21 @@ function parseRichStringElement(el: Element): ParsedSharedString {
 
 function parseXml(xmlText: string): Document {
   const parser = new DOMParser();
-  return parser.parseFromString(xmlText, 'application/xml');
+  const doc = parser.parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length > 0) {
+    throw new Error('XML 파싱 오류가 발생했습니다.');
+  }
+  return doc;
 }
 
 async function parseStyles(zip: JSZip): Promise<ParsedStyleTable> {
-  const stylesFile = zip.file('xl/styles.xml');
+  const stylesFile = findZipFile(zip, 'xl/styles.xml');
   if (!stylesFile) {
     return { cellStrikeByXf: [], cellDateByXf: [] };
   }
 
   const doc = parseXml(await stylesFile.async('string'));
 
-  // Parse custom number formats
   const customDateFmtIds = new Set<number>();
   const numFmtsEl = doc.getElementsByTagNameNS('*', 'numFmts')[0];
   if (numFmtsEl) {
@@ -169,7 +186,6 @@ async function parseStyles(zip: JSZip): Promise<ParsedStyleTable> {
     }
   }
 
-  // Parse fonts for strikethrough
   const fontStrikeFlags: boolean[] = [];
   const fontsEl = doc.getElementsByTagNameNS('*', 'fonts')[0];
   if (fontsEl) {
@@ -178,7 +194,6 @@ async function parseStyles(zip: JSZip): Promise<ParsedStyleTable> {
     }
   }
 
-  // Parse cellXfs mapping style index -> font strike & date format
   const cellStrikeByXf: boolean[] = [];
   const cellDateByXf: boolean[] = [];
   const cellXfsEl = doc.getElementsByTagNameNS('*', 'cellXfs')[0];
@@ -197,7 +212,7 @@ async function parseStyles(zip: JSZip): Promise<ParsedStyleTable> {
 }
 
 async function parseSharedStrings(zip: JSZip): Promise<ParsedSharedString[]> {
-  const sstFile = zip.file('xl/sharedStrings.xml');
+  const sstFile = findZipFile(zip, 'xl/sharedStrings.xml');
   if (!sstFile) return [];
 
   const doc = parseXml(await sstFile.async('string'));
@@ -209,15 +224,34 @@ async function parseSharedStrings(zip: JSZip): Promise<ParsedSharedString[]> {
 }
 
 function resolveWorkbookTargetPath(target: string): string {
-  const cleaned = target.replace(/^\/+/, '');
+  const cleaned = target.replace(/\\/g, '/').replace(/^\/+/, '');
   if (cleaned.startsWith('xl/')) return cleaned;
   if (cleaned.startsWith('../')) return cleaned.replace(/^(\.\.\/)+/, '');
   return `xl/${cleaned}`;
 }
 
+function extractRelationshipId(sheetEl: Element): string {
+  const byNs = sheetEl.getAttributeNS(
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+    'id'
+  );
+  if (byNs) return byNs;
+
+  const byPrefix = sheetEl.getAttribute('r:id');
+  if (byPrefix) return byPrefix;
+
+  for (let i = 0; i < sheetEl.attributes.length; i++) {
+    const attr = sheetEl.attributes[i];
+    if (attr.localName === 'id' && attr.name !== 'sheetId') {
+      return attr.value;
+    }
+  }
+  return '';
+}
+
 async function parseWorkbookSheetRefs(zip: JSZip): Promise<WorkbookSheetRef[]> {
-  const wbFile = zip.file('xl/workbook.xml');
-  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  const wbFile = findZipFile(zip, 'xl/workbook.xml');
+  const relsFile = findZipFile(zip, 'xl/_rels/workbook.xml.rels');
   if (!wbFile || !relsFile) {
     throw new Error('올바른 Excel(.xlsx) 워크북 구조가 아닙니다.');
   }
@@ -244,13 +278,7 @@ async function parseWorkbookSheetRefs(zip: JSZip): Promise<WorkbookSheetRef[]> {
     const title = s.getAttribute('name') || `Sheet ${i + 1}`;
     const sheetId = Number(s.getAttribute('sheetId') ?? i + 1);
     const state = s.getAttribute('state') ?? 'visible';
-    const rId =
-      s.getAttribute('r:id') ||
-      s.getAttributeNS(
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'id'
-      ) ||
-      '';
+    const rId = extractRelationshipId(s);
     const targetPath = relMap.get(rId);
     if (!targetPath) continue;
 
@@ -285,7 +313,7 @@ async function parseOoxmlBuffer(
     sheetRefs.find((r) => !r.tab.hidden) ??
     sheetRefs[0];
 
-  const sheetFile = zip.file(chosenRef.targetPath);
+  const sheetFile = findZipFile(zip, chosenRef.targetPath);
   if (!sheetFile) {
     throw new Error(`시트 데이터를 찾을 수 없습니다: ${chosenRef.tab.title}`);
   }
@@ -304,8 +332,8 @@ async function parseOoxmlBuffer(
   for (let i = 0; i < colsNodes.length; i++) {
     for (const colEl of getDirectChildrenByLocalName(colsNodes[i], 'col')) {
       const hiddenAttr = colEl.getAttribute('hidden');
+      if (hiddenAttr === null) continue;
       const isHidden = hiddenAttr === '1' || hiddenAttr === 'true';
-      if (!isHidden) continue;
 
       const min = Math.max(1, Number(colEl.getAttribute('min') ?? '1'));
       const max = Math.min(
@@ -313,7 +341,7 @@ async function parseOoxmlBuffer(
         Math.max(min, Number(colEl.getAttribute('max') ?? String(min)))
       );
       for (let c = min - 1; c <= max - 1; c++) {
-        columnHidden[c] = true;
+        columnHidden[c] = isHidden;
       }
     }
   }
@@ -328,8 +356,9 @@ async function parseOoxmlBuffer(
     if (range) merges.push(range);
   }
 
-  // Cell rows
+  // Cell rows (always 0-indexed matching Excel 1-based row numbers: Row 1 -> index 0, Row 7 -> index 6, Row 8 -> index 7)
   const rows: SheetCellData[][] = [];
+  const rowHidden: boolean[] = [];
   const sheetDataEl = doc.getElementsByTagNameNS('*', 'sheetData')[0];
   if (sheetDataEl) {
     const rowNodes = getDirectChildrenByLocalName(sheetDataEl, 'row');
@@ -340,6 +369,11 @@ async function parseOoxmlBuffer(
       const rowIdx = rAttr ? Number(rAttr) - 1 : implicitRowIdx;
       implicitRowIdx = rowIdx + 1;
       if (rowIdx < 0 || rowIdx > 5000) continue;
+
+      const rowHiddenAttr = rowEl.getAttribute('hidden');
+      if (rowHiddenAttr === '1' || rowHiddenAttr === 'true') {
+        rowHidden[rowIdx] = true;
+      }
 
       if (!rows[rowIdx]) rows[rowIdx] = [];
 
@@ -366,7 +400,7 @@ async function parseOoxmlBuffer(
 
         if (cellType === 's') {
           const vEl = getFirstDirectChild(cEl, 'v');
-          const sstIdx = Number(vEl?.textContent ?? '-1');
+          const sstIdx = Number(vEl?.textContent?.trim() ?? '-1');
           const sst = sharedStrings[sstIdx];
           if (sst) {
             formattedValue = sst.text;
@@ -381,7 +415,7 @@ async function parseOoxmlBuffer(
           }
         } else if (cellType === 'b') {
           const vEl = getFirstDirectChild(cEl, 'v');
-          formattedValue = vEl?.textContent === '1' ? 'TRUE' : 'FALSE';
+          formattedValue = vEl?.textContent?.trim() === '1' ? 'TRUE' : 'FALSE';
         } else {
           const vEl = getFirstDirectChild(cEl, 'v');
           const rawVal = vEl?.textContent ?? '';
@@ -431,6 +465,7 @@ async function parseOoxmlBuffer(
     activeTab: chosenRef.tab,
     merges,
     columnHidden,
+    rowHidden,
     rows,
   };
 }
@@ -470,19 +505,38 @@ function parseLegacyExcelWithSheetJS(
   const columnHidden: boolean[] = (ws['!cols'] ?? []).map((col) =>
     Boolean(col?.hidden)
   );
-
-  const rawRows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
-    header: 1,
-    defval: '',
-    raw: false,
-  });
-
-  const rows: SheetCellData[][] = rawRows.map((row) =>
-    (row ?? []).map((val) => ({
-      formattedValue:
-        val === null || val === undefined ? '' : String(val),
-    }))
+  const rowHidden: boolean[] = (ws['!rows'] ?? []).map((row) =>
+    Boolean(row?.hidden)
   );
+
+  // Preserve absolute 0-based row/column coordinates (do not shift by !ref start)
+  const rows: SheetCellData[][] = [];
+  const ref = ws['!ref'];
+  if (ref) {
+    const decoded = XLSX.utils.decode_range(ref);
+    const maxR = Math.min(decoded.e.r, 5000);
+    const maxC = Math.min(decoded.e.c, 1000);
+
+    for (let r = 0; r <= maxR; r++) {
+      const rowArr: SheetCellData[] = [];
+      for (let c = 0; c <= maxC; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        if (!cell) {
+          rowArr.push({});
+          continue;
+        }
+        const text =
+          cell.w !== undefined
+            ? String(cell.w)
+            : cell.v !== undefined && cell.v !== null
+              ? String(cell.v)
+              : '';
+        rowArr.push(text ? { formattedValue: text } : {});
+      }
+      rows.push(rowArr);
+    }
+  }
 
   return {
     spreadsheetTitle,
@@ -490,6 +544,7 @@ function parseLegacyExcelWithSheetJS(
     activeTab,
     merges,
     columnHidden,
+    rowHidden,
     rows,
   };
 }

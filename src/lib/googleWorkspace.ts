@@ -67,6 +67,7 @@ export interface SheetGridPayload {
   activeTab: SheetTabInfo;
   merges: GridRange[];
   columnHidden: boolean[];
+  rowHidden?: boolean[];
   rows: SheetCellData[][];
 }
 
@@ -404,7 +405,7 @@ export async function fetchSheetGrid(
     ranges: escapedRange,
     includeGridData: 'true',
     fields:
-      'properties.title,sheets(properties(sheetId,title,index,hidden),merges,data(columnMetadata(hiddenByUser),rowData(values(formattedValue,effectiveFormat/textFormat/strikethrough,textFormatRuns(startIndex,format/strikethrough)))))',
+      'properties.title,sheets(properties(sheetId,title,index,hidden),merges,data(columnMetadata(hiddenByUser),rowMetadata(hiddenByUser),rowData(values(formattedValue,effectiveFormat/textFormat/strikethrough,textFormatRuns(startIndex,format/strikethrough)))))',
   });
 
   const data = await fetchGoogleJson<{
@@ -413,6 +414,7 @@ export async function fetchSheetGrid(
       merges?: GridRange[];
       data?: Array<{
         columnMetadata?: Array<{ hiddenByUser?: boolean }>;
+        rowMetadata?: Array<{ hiddenByUser?: boolean }>;
         rowData?: Array<{ values?: SheetCellData[] }>;
       }>;
     }>;
@@ -427,6 +429,9 @@ export async function fetchSheetGrid(
   const columnHidden = (gridData?.columnMetadata ?? []).map((col) =>
     Boolean(col.hiddenByUser)
   );
+  const rowHidden = (gridData?.rowMetadata ?? []).map((row) =>
+    Boolean(row.hiddenByUser)
+  );
   const rows = (gridData?.rowData ?? []).map((row) => row.values ?? []);
 
   return {
@@ -438,6 +443,7 @@ export async function fetchSheetGrid(
     activeTab: targetTab,
     merges: sheetObj?.merges ?? [],
     columnHidden,
+    rowHidden,
     rows,
   };
 }

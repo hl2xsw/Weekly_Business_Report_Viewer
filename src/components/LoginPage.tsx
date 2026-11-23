@@ -1,10 +1,19 @@
-import React from 'react';
-import { FileSpreadsheet, Layers, SlidersHorizontal, Users } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  FileSpreadsheet,
+  Layers,
+  SlidersHorizontal,
+  Users,
+} from 'lucide-react';
+import { AuthErrorInfo, FIREBASE_PROJECT_ID } from '../lib/firebaseAuth';
 
 interface LoginPageProps {
   onSignIn: () => void;
   isSigningIn: boolean;
-  error: string | null;
+  error: AuthErrorInfo | null;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({
@@ -12,6 +21,21 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   isSigningIn,
   error,
 }) => {
+  const [copied, setCopied] = useState(false);
+  const currentHost =
+    typeof window !== 'undefined' ? window.location.hostname : '';
+  const firebaseAuthSettingsUrl = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`;
+
+  const handleCopyHost = async () => {
+    if (!currentHost) return;
+    try {
+      await navigator.clipboard.writeText(currentHost);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <header className="border-b border-slate-200 bg-white">
@@ -124,9 +148,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               {error && (
                 <div
                   role="alert"
-                  className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700 leading-relaxed"
+                  className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 space-y-3 leading-relaxed"
                 >
-                  {error}
+                  <p className="font-medium">{error.message}</p>
+
+                  {error.code === 'auth/unauthorized-domain' && currentHost && (
+                    <div className="pt-2.5 border-t border-red-200/80 text-xs text-red-900 space-y-2.5">
+                      <p className="font-semibold">
+                        해결 방법 (1회만 설정): Firebase 콘솔에 아래 도메인을 추가해 주세요.
+                      </p>
+                      <div className="flex items-center justify-between gap-2 bg-white border border-red-200 rounded-md px-3 py-2">
+                        <code className="font-mono-tabular text-slate-900 font-semibold truncate">
+                          {currentHost}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={handleCopyHost}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-800 whitespace-nowrap shrink-0"
+                        >
+                          {copied ? (
+                            <>
+                              <Check className="w-3.5 h-3.5" />
+                              <span>복사됨</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>도메인 복사</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1 text-red-800">
+                        <li>아래 링크로 Firebase Authentication 설정 페이지 이동</li>
+                        <li>승인된 도메인(Authorized domains) → 도메인 추가 클릭</li>
+                        <li>
+                          <code className="font-mono-tabular font-semibold">
+                            {currentHost}
+                          </code>{' '}
+                          입력 후 추가 완료
+                        </li>
+                      </ol>
+                      <a
+                        href={firebaseAuthSettingsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 font-semibold text-blue-700 hover:underline"
+                      >
+                        <span>Firebase 승인된 도메인 설정 열기</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 
