@@ -7,9 +7,21 @@ export interface RichTextLine {
 
 export interface ExecutionWeekColumn {
   colIndex: number;
+  colLetter: string;
   headerLabel: string;
   dateLabel: string;
   hidden: boolean;
+}
+
+export function indexToColLetters(colIndex: number): string {
+  let n = colIndex + 1;
+  let letters = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
 }
 
 export interface ProjectEntry {
@@ -120,7 +132,7 @@ function splitIntoNumberedChunks(lines: RichTextLine[]): NumberedChunk[] {
 
   for (const line of lines) {
     const trimmed = line.text.trim();
-    const match = trimmed.match(/^(\d{1,2})\s*[).]\s*(.*)$/);
+    const match = trimmed.match(/^(\d{1,2})(?:\)\s*|\.\s+)(.*)$/);
     if (match) {
       if (current) chunks.push(current);
       current = {
@@ -284,6 +296,7 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
     } else if (norm.includes('업무실행') || norm.includes('실행')) {
       executionColumns.push({
         colIndex: c,
+        colLetter: indexToColLetters(c),
         headerLabel: rawHeader,
         dateLabel: extractDateFromExecHeader(rawHeader),
         hidden: Boolean(columnHidden[c]),
@@ -365,8 +378,13 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
       }
     }
 
-    const rawTeamLabel =
-      teamText || (teams.length > 0 ? teams[teams.length - 1].rawTeamLabel : '미지정 팀');
+    const rawTeamLabel = (
+      teamText ||
+      (teams.length > 0 ? teams[teams.length - 1].rawTeamLabel : '미지정 팀')
+    )
+      .replace(/\r?\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     const { teamName, leaderName } = parseTeamAndLeader(rawTeamLabel);
 
     const projectLinesAll: RichTextLine[] = [];
@@ -438,7 +456,9 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
 
         // Strip leading "1)" from project title for crisp display while keeping numberPrefix
         const rawProjText = pChunk.lines.map((l) => l.text).join(' ').trim();
-        const cleanTitle = rawProjText.replace(/^\d{1,2}\s*[).]\s*/, '').trim();
+        const cleanTitle = rawProjText
+          .replace(/^\d{1,2}(?:\)\s*|\.\s+)/, '')
+          .trim();
 
         const stripNumFromFirstLine = (chunks: NumberedChunk[]): RichTextLine[] => {
           const matched = chunks.filter((c) => c.num === num);
@@ -446,7 +466,9 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
           for (const m of matched) {
             m.lines.forEach((line, idx) => {
               if (idx === 0) {
-                const cleaned = line.text.replace(/^\d{1,2}\s*[).]\s*/, '').trim();
+                const cleaned = line.text
+                  .replace(/^\d{1,2}(?:\)\s*|\.\s+)/, '')
+                  .trim();
                 if (cleaned) result.push({ ...line, text: cleaned });
               } else {
                 result.push(line);

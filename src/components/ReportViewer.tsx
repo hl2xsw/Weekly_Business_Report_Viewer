@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   ExternalLink,
+  Eye,
+  EyeOff,
   FolderOpen,
   RefreshCw,
   Search,
@@ -56,8 +56,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   const [selectedExecCol, setSelectedExecCol] = useState<number | null>(null);
   const [selectedTeamIndex, setSelectedTeamIndex] = useState<number>(0);
 
-  // Requirement 4: Collapsible sections (collapsed by default per Requirement 2)
-  const [showOwners, setShowOwners] = useState(false);
+  // D열(업무 진행 예정) 및 E열(이슈사항) 숨김/표시 토글 (기본: 숨김)
   const [showPlanned, setShowPlanned] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
   const [hideStrikethrough, setHideStrikethrough] = useState(false);
@@ -127,6 +126,13 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [teams.length]);
 
+  const execCols = parsedReport?.executionColumns ?? [];
+  // Display newest (rightmost, e.g. AU) first in the selector dropdown
+  const execColsNewestFirst = useMemo(
+    () => [...execCols].reverse(),
+    [execCols]
+  );
+
   const activeExecColMeta = useMemo(() => {
     if (!parsedReport || selectedExecCol === null) return null;
     return (
@@ -136,8 +142,13 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     );
   }, [parsedReport, selectedExecCol]);
 
-  const activeExecHeaderLabel =
-    activeExecColMeta?.headerLabel ?? '업무 실행';
+  const activeExecHeaderLabel = activeExecColMeta
+    ? `${activeExecColMeta.headerLabel}`
+    : '업무 실행';
+
+  const activeExecColBadge = activeExecColMeta
+    ? `${activeExecColMeta.colLetter}열`
+    : '';
 
   const currentTeamIssueCount = useMemo(() => {
     if (!currentTeam) return 0;
@@ -178,16 +189,14 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     });
   }, [currentTeam, teamSearch, selectedExecCol]);
 
-  const allExpanded = showOwners && showPlanned && showIssues;
-  const handleToggleAllDetails = () => {
-    const next = !allExpanded;
-    setShowOwners(next);
+  const bothDEVisible = showPlanned && showIssues;
+  const handleToggleBothDE = () => {
+    const next = !bothDEVisible;
     setShowPlanned(next);
     setShowIssues(next);
   };
 
-  // Execution column stepping
-  const execCols = parsedReport?.executionColumns ?? [];
+  // Execution column stepping (chronological left = older, right = newer)
   const currentExecPosition = execCols.findIndex(
     (c) => c.colIndex === selectedExecCol
   );
@@ -209,7 +218,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   const hasVisibleExtras =
     Boolean(currentTeam) &&
     (extraExecLines.length > 0 ||
-      (showOwners && (currentTeam?.extraOwners.length ?? 0) > 0) ||
+      (currentTeam?.extraOwners.length ?? 0) > 0 ||
       (showPlanned && (currentTeam?.extraPlanned.length ?? 0) > 0) ||
       (showIssues && (currentTeam?.extraIssues.length ?? 0) > 0));
 
@@ -218,6 +227,40 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
       spreadsheetId
     )}`;
+
+  // Dynamic responsive grid spans so B·C, optional D, optional E, and AU sit on the SAME row per project
+  const colSpans = useMemo(() => {
+    if (showPlanned && showIssues) {
+      return {
+        project: 'md:col-span-3',
+        planned: 'md:col-span-3',
+        issue: 'md:col-span-2',
+        exec: 'md:col-span-4',
+      };
+    }
+    if (showPlanned) {
+      return {
+        project: 'md:col-span-3',
+        planned: 'md:col-span-4',
+        issue: '',
+        exec: 'md:col-span-5',
+      };
+    }
+    if (showIssues) {
+      return {
+        project: 'md:col-span-4',
+        planned: '',
+        issue: 'md:col-span-3',
+        exec: 'md:col-span-5',
+      };
+    }
+    return {
+      project: 'md:col-span-4',
+      planned: '',
+      issue: '',
+      exec: 'md:col-span-8',
+    };
+  }, [showPlanned, showIssues]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -277,7 +320,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
       {/* Workspace Control Toolbar */}
       <div className="bg-white border-b border-slate-200">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-          {/* Left: Document & History Selectors (Sheet Tabs + Execution Week Columns) */}
+          {/* Left: Sheet Tab & Execution Week (AU etc.) Selectors */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex md:hidden items-center gap-2">
               <button
@@ -348,7 +391,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             {execCols.length > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-xs font-semibold text-slate-500 whitespace-nowrap mr-1">
-                  실행 주차
+                  업무 실행 열
                 </span>
                 <button
                   type="button"
@@ -366,17 +409,21 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <select
-                  aria-label="실행 주차 선택"
+                  aria-label="업무 실행 주차 열 선택"
                   value={selectedExecCol ?? ''}
                   onChange={(e) => setSelectedExecCol(Number(e.target.value))}
-                  className="h-9 pl-3 pr-8 text-sm font-medium text-blue-700 bg-blue-50/70 border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 font-mono-tabular"
+                  className="h-9 pl-3 pr-8 text-sm font-semibold text-blue-700 bg-blue-50/70 border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 font-mono-tabular"
                 >
-                  {execCols.map((col) => (
-                    <option key={col.colIndex} value={col.colIndex}>
-                      {col.headerLabel}
-                      {col.hidden ? ' (이전/숨김)' : ''}
-                    </option>
-                  ))}
+                  {execColsNewestFirst.map((col) => {
+                    const isDefault =
+                      col.colIndex === parsedReport?.defaultExecutionColIndex;
+                    return (
+                      <option key={col.colIndex} value={col.colIndex}>
+                        {col.colLetter}열 · {col.headerLabel}
+                        {isDefault ? ' (최신)' : col.hidden ? ' (이전)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
                 <button
                   type="button"
@@ -397,29 +444,11 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             )}
           </div>
 
-          {/* Right: Collapsible Column Toggles (Requirement 4) */}
+          {/* Right: D열(업무 진행 예정), E열(이슈사항) 숨김/표시 토글 버튼 */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-slate-500 mr-1 whitespace-nowrap">
-              추가 항목 보기
+              D·E열 표시
             </span>
-
-            <button
-              type="button"
-              onClick={() => setShowOwners((v) => !v)}
-              aria-pressed={showOwners}
-              className={`h-9 px-3 text-xs font-semibold rounded-lg border inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
-                showOwners
-                  ? 'bg-blue-700 text-white border-blue-700'
-                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              <span>담당자</span>
-              {showOwners ? (
-                <ChevronUp className="w-3.5 h-3.5" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5" />
-              )}
-            </button>
 
             <button
               type="button"
@@ -431,12 +460,12 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                   : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
               }`}
             >
-              <span>업무 진행 예정</span>
               {showPlanned ? (
-                <ChevronUp className="w-3.5 h-3.5" />
+                <Eye className="w-3.5 h-3.5" />
               ) : (
-                <ChevronDown className="w-3.5 h-3.5" />
+                <EyeOff className="w-3.5 h-3.5 text-slate-400" />
               )}
+              <span>D열 업무 진행 예정 {showPlanned ? '표시 중' : '숨김'}</span>
             </button>
 
             <button
@@ -451,23 +480,24 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
               }`}
             >
-              <span>
-                이슈사항
-                {currentTeamIssueCount > 0 ? ` (${currentTeamIssueCount})` : ''}
-              </span>
               {showIssues ? (
-                <ChevronUp className="w-3.5 h-3.5" />
+                <Eye className="w-3.5 h-3.5" />
               ) : (
-                <ChevronDown className="w-3.5 h-3.5" />
+                <EyeOff className="w-3.5 h-3.5 opacity-60" />
               )}
+              <span>
+                E열 이슈사항
+                {currentTeamIssueCount > 0 ? ` (${currentTeamIssueCount})` : ''}{' '}
+                {showIssues ? '표시 중' : '숨김'}
+              </span>
             </button>
 
             <button
               type="button"
-              onClick={handleToggleAllDetails}
+              onClick={handleToggleBothDE}
               className="h-9 px-3 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
-              {allExpanded ? '모두 접기' : '모두 펼치기'}
+              {bothDEVisible ? 'D·E 모두 숨김' : 'D·E 모두 표시'}
             </button>
           </div>
         </div>
@@ -475,7 +505,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
 
       {/* Main Content Workspace */}
       <div className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-6 flex flex-col lg:flex-row gap-6 items-start">
-        {/* Left Sidebar: Report Context & Team List */}
+        {/* Left Sidebar: A열 팀 목록 (한 페이지에 한 팀) */}
         <aside className="w-full lg:w-72 shrink-0 space-y-4">
           <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-2.5">
             <p className="text-xs font-medium text-slate-500 truncate">
@@ -499,7 +529,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-700">
-                팀 목록 (한 페이지에 한 팀)
+                팀 목록 (A열)
               </span>
               <span className="text-xs font-mono-tabular text-slate-500">
                 {teams.length}개 팀
@@ -530,15 +560,13 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                   >
                     {teams.map((t, idx) => (
                       <option key={t.id} value={idx}>
-                        {idx + 1}. {t.teamName}
-                        {t.leaderName ? ` (${t.leaderName})` : ''} · 프로젝트{' '}
-                        {t.projects.length}건
+                        {idx + 1}. {t.rawTeamLabel} · 프로젝트 {t.projects.length}건
                       </option>
                     ))}
                   </select>
                 </div>
 
-                {/* Desktop Vertical Team Navigation */}
+                {/* Desktop Vertical Team Navigation (A열 그대로 표시) */}
                 <nav
                   aria-label="팀 목록"
                   className="hidden lg:block p-2 space-y-1 max-h-[calc(100vh-340px)] overflow-y-auto"
@@ -556,23 +584,18 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                             : 'bg-transparent text-slate-700 border-transparent hover:bg-slate-50'
                         }`}
                       >
-                        <div className="min-w-0">
-                          <p
-                            className={`text-sm truncate ${
-                              isSelected ? 'font-bold' : 'font-medium'
-                            }`}
-                          >
-                            {team.teamName}
-                          </p>
-                          {team.leaderName && (
-                            <p className="text-xs text-slate-500 truncate mt-0.5">
-                              리더 {team.leaderName}
-                            </p>
-                          )}
-                        </div>
+                        <span
+                          className={`text-sm leading-snug break-words min-w-0 ${
+                            isSelected ? 'font-bold' : 'font-medium'
+                          }`}
+                        >
+                          {team.rawTeamLabel}
+                        </span>
                         <span
                           className={`text-xs font-mono-tabular shrink-0 ${
-                            isSelected ? 'text-blue-700 font-semibold' : 'text-slate-400'
+                            isSelected
+                              ? 'text-blue-700 font-semibold'
+                              : 'text-slate-400'
                           }`}
                         >
                           {team.projects.length}
@@ -654,20 +677,14 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               <section className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-                        {currentTeam.teamName}
-                      </h2>
-                      {currentTeam.leaderName && (
-                        <span className="text-sm font-medium text-slate-600">
-                          리더 {currentTeam.leaderName}
-                        </span>
-                      )}
-                    </div>
+                    <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+                      {currentTeam.rawTeamLabel}
+                    </h2>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <span>프로젝트 {currentTeam.projects.length}건</span>
                       <span aria-hidden="true">·</span>
-                      <span className="font-mono-tabular text-blue-700 font-medium">
+                      <span className="font-mono-tabular text-blue-700 font-semibold">
+                        {activeExecColBadge ? `${activeExecColBadge} · ` : ''}
                         {activeExecHeaderLabel}
                       </span>
                       {activeTabTitle && (
@@ -719,7 +736,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                       type="text"
                       value={teamSearch}
                       onChange={(e) => setTeamSearch(e.target.value)}
-                      placeholder="현재 팀 내 프로젝트 또는 업무 내용 검색"
+                      placeholder="현재 팀 내 프로젝트, 담당자, 업무 내용 검색"
                       className="w-full h-9 pl-9 pr-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
                     />
                   </div>
@@ -738,14 +755,23 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                 </div>
               </section>
 
-              {/* Team Projects Table / Structured View */}
+              {/* Team Projects Table: B·C열(프로젝트·담당자) + 선택 D·E열 + AU열(업무 실행)을 같은 줄에 표시 */}
               <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                 {/* Column Header */}
-                <div className="hidden md:grid grid-cols-12 gap-6 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                  <div className="col-span-4">
-                    프로젝트{showOwners ? ' · 담당자' : ''}
+                <div className="hidden md:grid grid-cols-12 gap-5 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                  <div className={colSpans.project}>
+                    프로젝트 · 담당자 (B·C열)
                   </div>
-                  <div className="col-span-8">{activeExecHeaderLabel}</div>
+                  {showPlanned && (
+                    <div className={colSpans.planned}>업무 진행 예정 (D열)</div>
+                  )}
+                  {showIssues && (
+                    <div className={colSpans.issue}>이슈사항 (E열)</div>
+                  )}
+                  <div className={colSpans.exec}>
+                    {activeExecHeaderLabel}
+                    {activeExecColBadge ? ` (${activeExecColBadge})` : ''}
+                  </div>
                 </div>
 
                 {filteredProjects.length === 0 ? (
@@ -760,20 +786,18 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                           ? (proj.executionByCol[selectedExecCol] ?? [])
                           : [];
 
-                      const showExpansionRow = showPlanned || showIssues;
-
                       return (
                         <article
                           key={proj.key}
                           className="px-5 sm:px-6 py-5 hover:bg-slate-50/40 transition-colors"
                         >
-                          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6 items-start">
-                            {/* Project Title (+ Optional Owners) */}
-                            <div className="md:col-span-4 space-y-2.5">
-                              <div className="flex items-start gap-2.5">
-                                <span className="font-mono-tabular text-xs font-semibold text-blue-700 mt-1 shrink-0 w-5">
+                          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-5 items-start">
+                            {/* Column 1: B열 프로젝트 + C열 담당자 (번호 매칭, 항상 표시) */}
+                            <div className={`${colSpans.project} space-y-2`}>
+                              <div className="flex items-start gap-2">
+                                <span className="font-mono-tabular text-sm font-bold text-blue-700 shrink-0">
                                   {proj.numberPrefix !== '-'
-                                    ? `${proj.numberPrefix.padStart(2, '0')}.`
+                                    ? `${proj.numberPrefix})`
                                     : '·'}
                                 </span>
                                 <h3 className="text-[15px] font-bold text-slate-900 leading-snug break-words">
@@ -781,84 +805,76 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                                 </h3>
                               </div>
 
-                              {showOwners && (
-                                <div className="pl-7 pt-1">
-                                  <p className="text-[11px] font-semibold text-slate-400 mb-0.5">
-                                    담당자
-                                  </p>
-                                  {proj.owners.length > 0 ? (
-                                    <p className="text-sm text-slate-700 leading-relaxed">
-                                      {proj.owners.map((o) => o.text).join(', ')}
-                                    </p>
-                                  ) : (
-                                    <p className="text-xs text-slate-400">
-                                      미기재
-                                    </p>
-                                  )}
-                                </div>
-                              )}
+                              <div className="pl-6 text-xs text-slate-600 leading-relaxed">
+                                <span className="font-semibold text-slate-400 mr-1.5">
+                                  담당자
+                                </span>
+                                {proj.owners.length > 0 ? (
+                                  <span className="text-slate-700 font-medium">
+                                    {proj.owners.map((o) => o.text).join(', ')}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </div>
                             </div>
 
-                            {/* Weekly Execution Content (Default Core Column) */}
-                            <div className="md:col-span-8 space-y-4">
-                              <div>
-                                <p className="md:hidden text-xs font-semibold text-blue-700 mb-1.5">
-                                  {activeExecHeaderLabel}
+                            {/* Optional Column 2: D열 업무 진행 예정 */}
+                            {showPlanned && (
+                              <div
+                                className={`${colSpans.planned} md:border-l md:border-slate-100 md:pl-4 space-y-1.5`}
+                              >
+                                <p className="md:hidden text-xs font-semibold text-slate-500">
+                                  업무 진행 예정 (D열)
                                 </p>
                                 <RichTaskLines
-                                  lines={execLines}
+                                  lines={proj.plannedTasks}
                                   hideStrikethrough={hideStrikethrough}
-                                  emptyText="이번 주 업무 실행 내용이 기재되지 않았습니다."
+                                  emptyText="-"
                                 />
                               </div>
+                            )}
 
-                              {/* Optional Collapsible Sections: 업무 진행 예정 / 이슈사항 */}
-                              {showExpansionRow && (
-                                <div
-                                  className={`pt-4 border-t border-slate-100 grid grid-cols-1 ${
-                                    showPlanned && showIssues
-                                      ? 'xl:grid-cols-2'
-                                      : ''
-                                  } gap-5`}
+                            {/* Optional Column 3: E열 이슈사항 */}
+                            {showIssues && (
+                              <div
+                                className={`${colSpans.issue} md:border-l md:border-slate-100 md:pl-4 space-y-1.5`}
+                              >
+                                <p
+                                  className={`md:hidden text-xs font-semibold ${
+                                    proj.issues.length > 0
+                                      ? 'text-red-700'
+                                      : 'text-slate-500'
+                                  }`}
                                 >
-                                  {showPlanned && (
-                                    <div className="space-y-1.5">
-                                      <h4 className="text-xs font-semibold text-slate-500">
-                                        업무 진행 예정
-                                      </h4>
-                                      <RichTaskLines
-                                        lines={proj.plannedTasks}
-                                        hideStrikethrough={hideStrikethrough}
-                                        emptyText="기재된 진행 예정 사항이 없습니다."
-                                      />
-                                    </div>
-                                  )}
+                                  이슈사항 (E열)
+                                </p>
+                                <RichTaskLines
+                                  lines={proj.issues}
+                                  hideStrikethrough={hideStrikethrough}
+                                  emphasisTone={
+                                    proj.issues.length > 0 ? 'issue' : 'default'
+                                  }
+                                  emptyText="-"
+                                />
+                              </div>
+                            )}
 
-                                  {showIssues && (
-                                    <div className="space-y-1.5">
-                                      <h4
-                                        className={`text-xs font-semibold ${
-                                          proj.issues.length > 0
-                                            ? 'text-red-700'
-                                            : 'text-slate-500'
-                                        }`}
-                                      >
-                                        이슈사항
-                                      </h4>
-                                      <RichTaskLines
-                                        lines={proj.issues}
-                                        hideStrikethrough={hideStrikethrough}
-                                        emphasisTone={
-                                          proj.issues.length > 0
-                                            ? 'issue'
-                                            : 'default'
-                                        }
-                                        emptyText="특이 이슈사항 없음"
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
+                            {/* Final Column (Same Row): AU열 최신 업무 실행 */}
+                            <div
+                              className={`${colSpans.exec} md:border-l md:border-slate-100 md:pl-4`}
+                            >
+                              <p className="md:hidden text-xs font-semibold text-blue-700 mb-1.5">
+                                {activeExecHeaderLabel}
+                                {activeExecColBadge
+                                  ? ` (${activeExecColBadge})`
+                                  : ''}
+                              </p>
+                              <RichTaskLines
+                                lines={execLines}
+                                hideStrikethrough={hideStrikethrough}
+                                emptyText="작성된 업무 실행 내용이 없습니다."
+                              />
                             </div>
                           </div>
                         </article>
@@ -868,54 +884,57 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                     {/* Unnumbered / Common Team Notes if any exist */}
                     {hasVisibleExtras && (
                       <article className="px-5 sm:px-6 py-5 bg-slate-50/70">
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6 items-start">
-                          <div className="md:col-span-4 space-y-2">
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-5 items-start">
+                          <div className={`${colSpans.project} space-y-2`}>
                             <h3 className="text-sm font-bold text-slate-800">
                               기타 · 공통 사항
                             </h3>
-                            {showOwners &&
-                              currentTeam.extraOwners.length > 0 && (
-                                <div>
-                                  <p className="text-[11px] font-semibold text-slate-400">
-                                    담당자
-                                  </p>
-                                  <RichTaskLines
-                                    lines={currentTeam.extraOwners}
-                                  />
-                                </div>
-                              )}
-                          </div>
-                          <div className="md:col-span-8 space-y-4">
-                            {extraExecLines.length > 0 && (
-                              <RichTaskLines
-                                lines={extraExecLines}
-                                hideStrikethrough={hideStrikethrough}
-                              />
+                            {currentTeam.extraOwners.length > 0 && (
+                              <div className="text-xs text-slate-600">
+                                <span className="font-semibold text-slate-400 mr-1.5">
+                                  담당자
+                                </span>
+                                <span>
+                                  {currentTeam.extraOwners
+                                    .map((o) => o.text)
+                                    .join(', ')}
+                                </span>
+                              </div>
                             )}
-                            {showPlanned &&
-                              currentTeam.extraPlanned.length > 0 && (
-                                <div className="pt-3 border-t border-slate-200 space-y-1.5">
-                                  <h4 className="text-xs font-semibold text-slate-500">
-                                    업무 진행 예정 (기타)
-                                  </h4>
-                                  <RichTaskLines
-                                    lines={currentTeam.extraPlanned}
-                                    hideStrikethrough={hideStrikethrough}
-                                  />
-                                </div>
-                              )}
-                            {showIssues &&
-                              currentTeam.extraIssues.length > 0 && (
-                                <div className="pt-3 border-t border-slate-200 space-y-1.5">
-                                  <h4 className="text-xs font-semibold text-red-700">
-                                    이슈사항 (공통)
-                                  </h4>
-                                  <RichTaskLines
-                                    lines={currentTeam.extraIssues}
-                                    emphasisTone="issue"
-                                  />
-                                </div>
-                              )}
+                          </div>
+
+                          {showPlanned && (
+                            <div
+                              className={`${colSpans.planned} md:border-l md:border-slate-200 md:pl-4`}
+                            >
+                              <RichTaskLines
+                                lines={currentTeam.extraPlanned}
+                                hideStrikethrough={hideStrikethrough}
+                                emptyText="-"
+                              />
+                            </div>
+                          )}
+
+                          {showIssues && (
+                            <div
+                              className={`${colSpans.issue} md:border-l md:border-slate-200 md:pl-4`}
+                            >
+                              <RichTaskLines
+                                lines={currentTeam.extraIssues}
+                                emphasisTone="issue"
+                                emptyText="-"
+                              />
+                            </div>
+                          )}
+
+                          <div
+                            className={`${colSpans.exec} md:border-l md:border-slate-200 md:pl-4`}
+                          >
+                            <RichTaskLines
+                              lines={extraExecLines}
+                              hideStrikethrough={hideStrikethrough}
+                              emptyText="-"
+                            />
                           </div>
                         </div>
                       </article>
@@ -937,9 +956,9 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                     className="h-10 px-4 text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg disabled:opacity-40 transition-colors inline-flex items-center gap-1.5"
                   >
                     <ChevronLeft className="w-4 h-4" />
-                    <span>
+                    <span className="truncate max-w-[200px]">
                       {selectedTeamIndex > 0
-                        ? teams[selectedTeamIndex - 1].teamName
+                        ? teams[selectedTeamIndex - 1].rawTeamLabel
                         : '이전 팀'}
                     </span>
                   </button>
@@ -959,9 +978,9 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
                     disabled={selectedTeamIndex >= teams.length - 1}
                     className="h-10 px-4 text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg disabled:opacity-40 transition-colors inline-flex items-center gap-1.5"
                   >
-                    <span>
+                    <span className="truncate max-w-[200px]">
                       {selectedTeamIndex < teams.length - 1
-                        ? teams[selectedTeamIndex + 1].teamName
+                        ? teams[selectedTeamIndex + 1].rawTeamLabel
                         : '다음 팀'}
                     </span>
                     <ChevronRight className="w-4 h-4" />
