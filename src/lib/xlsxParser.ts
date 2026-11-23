@@ -339,7 +339,7 @@ async function parseOoxmlBuffer(
       const rAttr = rowEl.getAttribute('r');
       const rowIdx = rAttr ? Number(rAttr) - 1 : implicitRowIdx;
       implicitRowIdx = rowIdx + 1;
-      if (rowIdx < 0) continue;
+      if (rowIdx < 0 || rowIdx > 5000) continue;
 
       if (!rows[rowIdx]) rows[rowIdx] = [];
 
@@ -351,7 +351,7 @@ async function parseOoxmlBuffer(
         const parsedRef = refAttr ? parseCellRef(refAttr) : null;
         const colIdx = parsedRef ? parsedRef.col : implicitColIdx;
         implicitColIdx = colIdx + 1;
-        if (colIdx < 0) continue;
+        if (colIdx < 0 || colIdx > 1000) continue;
 
         const cellType = cEl.getAttribute('t') ?? '';
         const styleIdxAttr = cEl.getAttribute('s');
@@ -411,9 +411,18 @@ async function parseOoxmlBuffer(
     }
   }
 
-  // Ensure dense row array without undefined holes
+  // Ensure dense row and cell arrays with zero undefined holes
   for (let r = 0; r < rows.length; r++) {
-    if (!rows[r]) rows[r] = [];
+    if (!rows[r]) {
+      rows[r] = [];
+      continue;
+    }
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) {
+      if (!row[c]) {
+        row[c] = {};
+      }
+    }
   }
 
   return {

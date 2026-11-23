@@ -175,7 +175,7 @@ function findHeaderRow(rows: SheetCellData[][]): number {
     const row = rows[r] ?? [];
     let score = 0;
     for (const cell of row) {
-      const norm = normalizeHeader(cell.formattedValue ?? '');
+      const norm = normalizeHeader(cell?.formattedValue ?? '');
       if (!norm) continue;
       if (norm.includes('팀')) score += 2;
       if (norm.includes('프로젝트')) score += 3;
@@ -222,7 +222,7 @@ export function parseWeeklyReportGrid(grid: SheetGridPayload): ParsedWeeklyRepor
   const metaEndRow = headerRowIndex > 0 ? headerRowIndex : Math.min(rows.length, 8);
   for (let r = 0; r < metaEndRow; r++) {
     const rowTexts = (rows[r] ?? [])
-      .map((c) => c.formattedValue?.trim() ?? '')
+      .map((c) => c?.formattedValue?.trim() ?? '')
       .filter(Boolean);
     if (rowTexts.length === 0) continue;
 
